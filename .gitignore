@@ -1,0 +1,6 @@
+*.exe
+Perelet.exe.config
+!source/Perelet.exe.config
+*.partial
+preferences.xml
+*.zip
