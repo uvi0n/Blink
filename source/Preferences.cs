@@ -7,14 +7,17 @@ using System.Windows.Interop;
 using System.Windows.Markup;
 
 internal sealed class Preferences {
-    static string ConfigPath {get{return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Perelet","preferences.xml");}}
+    static string ConfigPath {get{return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Blink","preferences.xml");}}
     public string Folder=Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
     public int Hours=12;
     public bool ConfirmClose=true,Tray;
     public string Theme=Themes.Names[0];
     public string[] Colors=(string[])Themes.Defaults.Clone();
     internal static readonly string[] Accents={"Персик","Мята","Лаванда","Голубой"};
-    public static Preferences Load(){return Load(ConfigPath);}
+    public static Preferences Load(){
+        string legacy=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Perelet","preferences.xml");
+        return Load(File.Exists(ConfigPath)?ConfigPath:legacy);
+    }
     internal static Preferences Load(string location){
         var p=new Preferences();
         try{
@@ -23,8 +26,8 @@ internal sealed class Preferences {
                 if(Directory.Exists(folder))p.Folder=folder;
                 int hours;if(int.TryParse((string)x.Element("hours"),out hours)&&Array.IndexOf(new[]{1,6,12,24},hours)>=0)p.Hours=hours;
                 string accent=(string)x.Element("accent");int legacy=Array.IndexOf(Accents,accent);if(legacy>=0)p.Colors[1]=new[]{"#FFAE79","#82DCC4","#C5AEFA","#91C8FF"}[legacy];
-                string theme=(string)x.Element("theme");if(Array.IndexOf(Themes.Names,theme)>=0)p.Theme=theme;
-                foreach(var el in x.Elements("color")){int i=Array.IndexOf(Themes.Names,(string)el.Attribute("theme"));if(i>=0&&Themes.Valid(el.Value))p.Colors[i]=el.Value;}
+                string theme=(string)x.Element("theme");if(theme=="Перелёт")theme="Blink";if(Array.IndexOf(Themes.Names,theme)>=0)p.Theme=theme;
+                foreach(var el in x.Elements("color")){int i=Array.IndexOf(Themes.Names,(string)el.Attribute("theme")=="Перелёт"?"Blink":(string)el.Attribute("theme"));if(i>=0&&Themes.Valid(el.Value))p.Colors[i]=el.Value;}
                 bool tray;if(bool.TryParse((string)x.Element("tray"),out tray))p.Tray=tray;
                 bool confirm;if(bool.TryParse((string)x.Element("confirmClose"),out confirm))p.ConfirmClose=confirm;
             }

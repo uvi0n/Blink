@@ -6,9 +6,9 @@
 
 ![Полярная ночь](theme-0.png)
 
-## Перелёт
+## Blink
 
-![Перелёт](theme-1.png)
+![Blink](theme-1.png)
 
 ## Атлас
 

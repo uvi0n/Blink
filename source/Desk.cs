@@ -36,7 +36,7 @@ class Desk {
         window.Width=Math.Min(window.Width,SystemParameters.WorkArea.Width);window.Height=Math.Min(window.Height,SystemParameters.WorkArea.Height);
         folder=preferences.Folder;
         ApplyAccent();window.SizeChanged+=delegate{ApplyAccent();};
-        trayIcon=new System.Windows.Forms.NotifyIcon{Text="Перелёт",Icon=System.Drawing.Icon.ExtractAssociatedIcon(typeof(Desk).Assembly.Location)};
+        trayIcon=new System.Windows.Forms.NotifyIcon{Text="Blink",Icon=System.Drawing.Icon.ExtractAssociatedIcon(typeof(Desk).Assembly.Location)};
         var menu=new System.Windows.Forms.ContextMenuStrip();menu.Items.Add("Открыть",null,delegate{Restore();});menu.Items.Add("Выйти",null,delegate{exitTray=true;Restore();window.Close();exitTray=false;});trayIcon.ContextMenuStrip=menu;trayIcon.DoubleClick+=delegate{Restore();};
         B("Settings").Click+=delegate{
             var host=Find<ContentControl>("SettingsHost");if(host.Content!=null){HideSettings();return;}
@@ -47,7 +47,7 @@ class Desk {
         B("QrButton").Click+=delegate{var qr=Find<Image>("Qr");if(qr.Visibility==Visibility.Visible){qr.Visibility=Visibility.Collapsed;return;}if(Address.Text.Length>0){qr.Source=LinkQr.Render(Address.Text);qr.Visibility=Visibility.Visible;}};
         window.Closing+=delegate(object sender,System.ComponentModel.CancelEventArgs e){
             if(preferences.Tray&&!exitTray){e.Cancel=true;trayIcon.Visible=true;window.Hide();return;}
-            if(session!=null && preferences.ConfirmClose)e.Cancel=MessageBox.Show(window,"Закрыть приложение и отозвать действующую ссылку?","Перелёт",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes;
+            if(session!=null && preferences.ConfirmClose)e.Cancel=MessageBox.Show(window,"Закрыть приложение и отозвать действующую ссылку?","Blink",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes;
         };
         Queue.ItemsSource=files;Queue.SelectionChanged+=delegate{Sync();};
         B("SendTab").Click+=delegate{SetMode(false);};B("ReceiveTab").Click+=delegate{SetMode(true);};

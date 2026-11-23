@@ -19,7 +19,7 @@ sealed class Link : IDisposable {
             req.Timeout=req.ReadWriteTimeout=5000;req.AllowAutoRedirect=false;req.KeepAlive=false;
             using(var res=(HttpWebResponse)req.GetResponse())
             using(var stream=new StreamReader(res.GetResponseStream())){
-                string expected="perelet-"+key.Substring(0,24);
+                string expected="blink-"+key.Substring(0,24);
                 if(res.StatusCode!=HttpStatusCode.OK||res.ContentLength>256)return false;
                 char[] data=new char[expected.Length+1];int n=stream.ReadBlock(data,0,data.Length);
                 return new string(data,0,n)==expected;

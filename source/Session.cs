@@ -30,7 +30,7 @@ public sealed class Session : IDisposable {
         byte[] random=new byte[32]; using(var rng=RandomNumberGenerator.Create()) rng.GetBytes(random);
         Key=BitConverter.ToString(random).Replace("-","").ToLowerInvariant();
         folderMode=receive && Directory.Exists(file);
-        partial=folderMode?Path.Combine(file,".perelet-"+Key+".partial"):file+"."+Key.Substring(0,12)+".partial";
+        partial=folderMode?Path.Combine(file,".blink-"+Key+".partial"):file+"."+Key.Substring(0,12)+".partial";
         try {
             if(receive && File.Exists(file)) throw new IOException("Выберите новое имя файла.");
             if(!receive) foreach(string name in files) sources.Add(new FileStream(name,FileMode.Open,FileAccess.Read,FileShare.Read));
@@ -82,7 +82,7 @@ public sealed class Session : IDisposable {
         else if(!receiving && route=="all.zip"){
             SendBundle(c,sources);
         }
-        else if(route=="probe") Reply(c,200,"perelet-"+Key.Substring(0,24));
+        else if(route=="probe") Reply(c,200,"blink-"+Key.Substring(0,24));
         else if(!receiving && (route=="file"||route.StartsWith("file/"))){
             int index=0;
             if(route!="file" && (!Int32.TryParse(route.Substring(5),System.Globalization.NumberStyles.None,CultureInfo.InvariantCulture,out index)||index>=sources.Count)){Reply(c,404,"");return;}
@@ -91,7 +91,7 @@ public sealed class Session : IDisposable {
         else Reply(c,404,"");
     }
     void SendBundle(LocalContext c,System.Collections.Generic.IEnumerable<FileStream> files){
-        var bundle=new Bundle(files);var r=c.Response;r.ContentType="application/zip";r.Headers["Content-Disposition"]="attachment; filename=Perelet.zip";r.ContentLength64=bundle.Length;
+        var bundle=new Bundle(files);var r=c.Response;r.ContentType="application/zip";r.Headers["Content-Disposition"]="attachment; filename=Blink.zip";r.ContentLength64=bundle.Length;
         if(c.Request.HttpMethod=="HEAD"){r.Close();return;}
         var t=transfers.Begin("Архив",bundle.PayloadSize);bool done=false;
         try{bundle.Send(r.OutputStream,()=>!closed && DateTime.UtcNow<Expires,(name,n)=>transfers.Report(t,name,n));r.Close();done=true;}

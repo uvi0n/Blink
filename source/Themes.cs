@@ -5,7 +5,7 @@ using System.Windows.Media;
 using System.Text.RegularExpressions;
 
 internal static class Themes {
-    internal static readonly string[] Names={"Полярная ночь","Перелёт","Атлас","Плакат","Терминал","Галька"};
+    internal static readonly string[] Names={"Полярная ночь","Blink","Атлас","Плакат","Терминал","Галька"};
     internal static readonly string[] Defaults={"#93CEFF","#FFAE79","#C6DF63","#FFCF38","#A9ED98","#C7A9ED"};
     // background, card, secondary surface, text, muted, hero
     static readonly string[][] palettes={

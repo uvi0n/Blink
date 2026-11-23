@@ -1,6 +1,6 @@
 *.exe
-Perelet.exe.config
-!source/Perelet.exe.config
+Blink.exe.config
+!source/Blink.exe.config
 *.partial
 preferences.xml
 *.zip
