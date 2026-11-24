@@ -13,7 +13,7 @@ internal static class Themes {
         new[]{"#10161C","#1B242C","#28333C","#EFF4F5","#C0CFD9","#344351"},
         new[]{"#F2EEE4","#FFFCF4","#E4E1D4","#25281E","#535B47","#E4E6D9"},
         new[]{"#FFCF38","#FFFAEC","#F4DF9F","#191816","#494232","#FF8D68"},
-        new[]{"#101A15","#18251C","#26382A","#E6F2E5","#A5BBA8","#203225"},
+        new[]{"#0D171B","#15232A","#20333A","#ECF5F2","#A9C2BE","#19353B"},
         new[]{"#F3EFF9","#FFFFFF","#E6DBF2","#392B48","#62526D","#EADFF6"}
     };
     public static bool Valid(string value){return value!=null && Regex.IsMatch(value,@"\A#[0-9A-Fa-f]{6}\z");}
@@ -25,10 +25,10 @@ internal static class Themes {
         string[] keys={"Base","Card","Surface","Text","Muted","HeroBrush"};
         for(int j=0;j<keys.Length;j++)w.Resources[keys[j]]=Brush(palettes[i][j]);
         string accent=p.Colors[i];w.Resources["Accent"]=Brush(accent);w.Resources["OnAccent"]=Brush(Ink(accent));
-        int radius=new[]{14,14,3,0,3,24}[i];w.Resources["Round"]=new CornerRadius(radius);
-        w.FontFamily=new FontFamily(i==4?"Consolas":"Segoe UI");w.FontSize=i==4?14:15;
-        var hero=(TextBlock)w.FindName("Hero");hero.FontFamily=new FontFamily(i==2?"Georgia":i==3?"Arial Black":w.FontFamily.Source);
-        hero.FontSize=new[]{34,34,43,40,30,37}[i];hero.FontWeight=i==3?FontWeights.Black:FontWeights.SemiBold;
+        int radius=new[]{14,14,3,0,8,24}[i];w.Resources["Round"]=new CornerRadius(radius);
+        w.FontFamily=new FontFamily("Segoe UI");w.FontSize=i==4?14:15;
+        var hero=(TextBlock)w.FindName("Hero");hero.FontFamily=new FontFamily(i==2?"Georgia":i==3?"Arial Black":i==4?"Consolas":w.FontFamily.Source);
+        hero.FontSize=new[]{38,38,43,40,38,38}[i];hero.FontWeight=i==3?FontWeights.Black:FontWeights.SemiBold;
         var header=(StackPanel)w.FindName("Navigation");
         DockPanel.SetDock(header,Dock.Top);header.Orientation=Orientation.Horizontal;header.Margin=new Thickness(0,0,0,16);
         var nav=(WrapPanel)w.FindName("Tabs");nav.Orientation=Orientation.Horizontal;nav.Margin=new Thickness(20,0,0,0);
@@ -41,8 +41,8 @@ internal static class Themes {
         var panel=new FrameworkElementFactory(i==5?typeof(WrapPanel):typeof(StackPanel));
         queue.ItemsPanel=new ItemsPanelTemplate(panel);
         queue.MaxHeight=i==4?220:170;
-        var artwork=(FrameworkElement)w.FindName("Artwork");artwork.Visibility=i==4||i==2?Visibility.Collapsed:Visibility.Visible;
-        ((StackPanel)w.FindName("HeroWords")).Margin=new Thickness(0,0,artwork.Visibility==Visibility.Visible?123:0,0);
+        var artwork=(FrameworkElement)w.FindName("Artwork");artwork.Visibility=(w.ActualWidth>0?w.ActualWidth:w.Width)<700?Visibility.Collapsed:Visibility.Visible;
+        ((StackPanel)w.FindName("HeroWords")).Margin=new Thickness(0,0,artwork.Visibility==Visibility.Visible?226:0,0);
     }
 }
 

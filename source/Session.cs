@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -8,48 +8,84 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 using System.Globalization;
+using System.Collections.Generic;
+using System.Linq;
 
 public sealed class Session : IDisposable {
-    readonly TcpListener listener = new TcpListener(IPAddress.Loopback,0);
+    readonly TcpListener listener;
+    readonly HashSet<TcpClient> clients=new HashSet<TcpClient>();
     readonly object uploadLock = new object();
-    readonly Semaphore slots = new Semaphore(8,8);
     readonly string path, partial;
+    FileStream staging;bool ownsPartial;
     readonly bool receiving, folderMode; string receivedPath;
     readonly System.Collections.Generic.List<FileStream> sources=new System.Collections.Generic.List<FileStream>();
     volatile bool closed, complete;
     long total = -1, offset, previousOffset = -1, previousCount; string previousDigest;
     readonly Transfers transfers=new Transfers();
+    public TransferSnapshot TransferSnapshot {get{return transfers.Snapshot();}}
     public string Outgoing {get{return transfers.Summary();}}
     public readonly string Local, Key;
     public Func<string,bool> Authorize;public bool Collect;
     readonly System.Collections.Generic.HashSet<string> approved=new System.Collections.Generic.HashSet<string>();
     readonly System.Collections.Generic.Dictionary<string,Session> uploads=new System.Collections.Generic.Dictionary<string,Session>();
-    int asking;
-    static string Token(){byte[] b=new byte[24];using(var g=RandomNumberGenerator.Create())g.GetBytes(b);return BitConverter.ToString(b).Replace("-","");}
+    readonly Dictionary<string,DateTime> pending=new Dictionary<string,DateTime>();
+    bool asking;
+    static string Token(){
+        byte[] bytes=new byte[24];
+        using(var generator=RandomNumberGenerator.Create())generator.GetBytes(bytes);
+        return BitConverter.ToString(bytes).Replace("-","");
+    }
+    static string GrantCookie(string token,string scope){
+        return "blinkgrant="+token+"; Secure; HttpOnly; SameSite=Strict; Path=/"+scope+"/";
+    }
     bool Gate(LocalContext c,string route){
-        if(Authorize==null || route=="probe")return true;
+        if(Authorize==null || route=="probe" || route=="brand.png")return true;
         string cookie=c.Request.Headers["Cookie"]??"";
         var match=Regex.Match(cookie,@"(?:^|; *)blinkgrant=([A-F0-9]{48})(?:;|$)");
-        lock(approved)if(match.Success&&approved.Contains(match.Groups[1].Value))return true;
-        if(route=="request" && c.Request.HttpMethod=="POST" && match.Success && Interlocked.CompareExchange(ref asking,1,0)==0){
-            try{if(Authorize(match.Groups[1].Value.Substring(0,8))){lock(approved)approved.Add(match.Groups[1].Value);c.Response.Headers["Location"]="./";Reply(c,303,"");return false;}}finally{Interlocked.Exchange(ref asking,0);}
+        string token=match.Success?match.Groups[1].Value:null;
+        bool prompt=false;
+        lock(approved){
+            if(token!=null && approved.Contains(token))return true;
+            var now=DateTime.UtcNow;
+            foreach(string old in pending.Where(pair=>pair.Value<=now).Select(pair=>pair.Key).ToArray())pending.Remove(old);
+            if(token==null || !pending.ContainsKey(token)){
+                if(pending.Count>=128){Reply(c,429,"Слишком много ожидающих запросов. Повторите позднее.");return false;}
+                token=Token();pending.Add(token,now.AddMinutes(5));
+            }else if(route=="request" && c.Request.HttpMethod=="POST" && !asking){
+                asking=true;prompt=true;pending.Remove(token);
+            }
         }
-        string token=Token();c.Response.Headers["Set-Cookie"]="blinkgrant="+token+"; Secure; HttpOnly; SameSite=Strict; Path=/"+Key+"/";
-        Reply(c,403,"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><h1>Blink · Подтверждение</h1><p>Сообщите отправителю код "+token.Substring(0,8)+"</p><form method=post action='/"+Key+"/request'><button>Запросить доступ</button></form>","text/html; charset=utf-8");return false;
+        if(prompt){
+            try{
+                if(Authorize(token.Substring(0,8)) && !closed && DateTime.UtcNow<Expires){
+                    lock(approved)approved.Add(token);
+                    c.Response.Headers["Location"]="./";Reply(c,303,"");return false;
+                }
+                Reply(c,403,"Доступ не разрешён. Чтобы запросить его снова, откройте исходную ссылку.");return false;
+            }finally{lock(approved)asking=false;}
+        }
+        c.Response.Headers["Set-Cookie"]=GrantCookie(token,Key);
+        string page="<!doctype html><html lang=ru><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Blink · Подтверждение</title>"
+            +"<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:#102222;color:#effcf6;font:17px/1.5 system-ui}main{max-width:480px;padding:28px;border:1px solid #496760;border-radius:20px;background:#19302d}h1{font-size:28px;line-height:1.15}strong{font:700 30px monospace;letter-spacing:.13em;color:#b7f898}button{font:inherit;border:0;border-radius:9px;background:#b7f898;color:#14251b;padding:10px 18px;cursor:pointer}</style>"
+            +"<main><img src='/"+Key+"/brand.png' width=48 alt='Blink'><h1>Подтверждение получателя</h1><p>Сообщите этот код отправителю и запросите доступ.</p><strong>"+token.Substring(0,8)+"</strong><form method=post action='/"+Key+"/request'><p><button>Запросить доступ</button></p></form></main></html>";
+        Reply(c,403,page,"text/html; charset=utf-8");return false;
     }
     public readonly DateTime Expires;
     public Session(string file, bool receive) : this(new[]{file},receive) {}
-    public Session(string[] files, bool receive,int hours=12) {
-        Expires=DateTime.UtcNow.AddHours(hours);
+    public Session(string[] files,bool receive,int hours=12) : this(files,receive,DateTime.UtcNow.AddHours(hours),true) {}
+    private Session(string[] files,bool receive,DateTime expires,bool listen) {
+        Expires=expires;
         string file=files[0];
         path=file; receiving=receive;
         byte[] random=new byte[32]; using(var rng=RandomNumberGenerator.Create()) rng.GetBytes(random);
         Key=BitConverter.ToString(random).Replace("-","").ToLowerInvariant();
         folderMode=receive && Directory.Exists(file);
-        partial=folderMode?Path.Combine(file,".blink-"+Key+".partial"):file+"."+Key.Substring(0,12)+".partial";
+        partial=folderMode?Path.Combine(file,".blink-"+Key+".partial"):file+"."+Key+".partial";
         try {
             if(receive && File.Exists(file)) throw new IOException("Выберите новое имя файла.");
             if(!receive) foreach(string name in files) sources.Add(new FileStream(name,FileMode.Open,FileAccess.Read,FileShare.Read));
+            if(!listen)return;
+            listener=new TcpListener(IPAddress.Loopback,0);
             listener.Start(16); Local="http://127.0.0.1:"+((IPEndPoint)listener.LocalEndpoint).Port;
         } catch { Dispose(); throw; }
         ThreadPool.QueueUserWorkItem(delegate { Listen(); });
@@ -57,9 +93,20 @@ public sealed class Session : IDisposable {
     void Listen() {
         while(!closed) try {
             var client=listener.AcceptTcpClient();
-            if(!slots.WaitOne(0)){client.Close();continue;}
+            lock(clients){
+                if(closed || clients.Count>=8){client.Close();continue;}
+                clients.Add(client);
+            }
             client.ReceiveTimeout=20000;client.SendTimeout=30000;
-            ThreadPool.QueueUserWorkItem(delegate {using(client){try {Handle(new LocalContext(client));} catch(IOException){} catch(Exception){} finally {slots.Release();}}});        } catch { if(!closed) Thread.Sleep(50); }
+            ThreadPool.QueueUserWorkItem(delegate {
+                using(client){
+                    try{Handle(new LocalContext(client));}
+                    catch(IOException){}catch(SocketException){}catch(ObjectDisposedException){}
+                    catch(Exception ex){Trace.TraceWarning("Blink HTTP request stopped: "+ex.GetType().Name);}
+                    finally{lock(clients)clients.Remove(client);}
+                }
+            });
+        } catch { if(!closed) Thread.Sleep(50); }
     }
     static void Reply(LocalContext c,int status,string text,string mime="text/plain; charset=utf-8") {
         var data=Encoding.UTF8.GetBytes(text); c.Response.StatusCode=status;c.Response.ContentType=mime;c.Response.ContentLength64=data.Length;
@@ -74,15 +121,24 @@ public sealed class Session : IDisposable {
         string prefix="/"+Key+"/", url=q.Path;
         if(closed || DateTime.UtcNow>=Expires || !url.StartsWith(prefix,StringComparison.Ordinal)){Reply(c,404,"Ссылка недоступна.");return;}
         string route=url.Substring(prefix.Length);
+        if(q.HttpMethod=="POST" && String.Equals(q.Headers["Sec-Fetch-Site"],"cross-site",StringComparison.OrdinalIgnoreCase)){
+            Reply(c,403,"Откройте страницу Blink и повторите действие.");return;
+        }
         if(!Gate(c,route))return;
+        if(route=="brand.png" && (q.HttpMethod=="GET"||q.HttpMethod=="HEAD")){
+            using(var icon=typeof(Session).Assembly.GetManifestResourceStream("dagger.png")){
+                r.ContentType="image/png";r.ContentLength64=icon.Length;if(q.HttpMethod=="GET")icon.CopyTo(r.OutputStream);r.Close();
+            }
+            return;
+        }
         if(Collect && q.HttpMethod=="POST"){
-            if(route=="new-upload"){lock(uploads){if(closed){Reply(c,410,"");return;}if(uploads.Count>=128){Reply(c,429,"Лимит этой сессии исчерпан.");return;}string id=Token();uploads.Add(id,new Session(path,true));Reply(c,200,id);}return;}
+            if(route=="new-upload"){lock(uploads){if(closed){Reply(c,410,"");return;}if(uploads.Count>=128){Reply(c,429,"Лимит этой сессии исчерпан.");return;}string id=Token();uploads.Add(id,new Session(new[]{path},true,Expires,false));Reply(c,200,id);}return;}
             if(route.StartsWith("chunk/")){Session child;lock(uploads)uploads.TryGetValue(route.Substring(6),out child);if(child==null){Reply(c,404,"");return;}child.Upload(c);return;}
             if(route=="chunk"){Reply(c,400,"Начните новую загрузку.");return;}
         }
         if(receiving && route=="chunk" && q.HttpMethod=="POST"){Upload(c);return;}
         if(!receiving && route=="selected.zip" && q.HttpMethod=="POST"){
-            if(q.ContentLength64<1 || q.ContentLength64>sources.Count*24L || q.ContentLength64>int.MaxValue){Reply(c,400,"Выберите файлы.");return;}
+            if(q.ContentLength64<1 || q.ContentLength64>sources.Count*24L || q.ContentLength64>4*1024*1024){Reply(c,400,"Выберите файлы.");return;}
             var data=new byte[(int)q.ContentLength64];int pos=0;
             while(pos<data.Length){int n=q.InputStream.Read(data,pos,data.Length-pos);if(n==0)throw new IOException();pos+=n;}
             var ids=new System.Collections.Generic.SortedSet<int>();
@@ -98,7 +154,7 @@ public sealed class Session : IDisposable {
             for(int i=0;i<sources.Count;i++){
                 var item=sources[i];
                 string ext=Path.GetExtension(item.Name).ToLowerInvariant();string thumb=(item.Length<=32*1024*1024 && (ext==".jpg"||ext==".jpeg"||ext==".png"))?"<img loading=lazy width=60 alt='' src='thumb/"+i+"'>":"";
-                list.Append("<li>").Append(thumb).Append("<input type=checkbox name=id form=selection aria-label=\"Выбрать: ").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("\" value=").Append(i).Append("><div><strong>").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("</strong><small>").Append(SizeText(item.Length)).Append("</small></div><a download href='file/").Append(i).Append("'>Скачать</a></li>");
+                list.Append("<li data-bytes=\"").Append(item.Length.ToString(CultureInfo.InvariantCulture)).Append("\">").Append(thumb).Append("<input type=checkbox name=id form=selection aria-label=\"Выбрать: ").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("\" value=").Append(i).Append("><div><strong>").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("</strong><small>").Append(SizeText(item.Length)).Append("</small></div><a download href='file/").Append(i).Append("'>Скачать</a></li>");
             }
             string html=Resource("page.html").Replace("@COLLECT@",Collect?"yes":"no").Replace("@MODE@",receiving?"receive":"send").Replace("@FILES@",list.ToString()).Replace("@TARGET@",folderMode?"Исходное имя файла":WebUtility.HtmlEncode(Path.GetFileName(path)));
             Reply(c,200,html,"text/html; charset=utf-8");
@@ -181,7 +237,7 @@ public sealed class Session : IDisposable {
             byte[] data=new byte[(int)count];int used=0;
             while(used<data.Length){int n=q.InputStream.Read(data,used,data.Length-used);if(n==0){Reply(c,400,"Неполный блок.");return;}used+=n;}
             using(var hash=SHA256.Create()) if(!String.Equals(BitConverter.ToString(hash.ComputeHash(data)).Replace("-",""),q.Headers["X-SHA256"],StringComparison.OrdinalIgnoreCase)){Reply(c,400,"Ошибка проверки блока.");return;}
-            if(closed){Reply(c,410,"");return;}
+            if(closed || DateTime.UtcNow>=Expires){Reply(c,410,"Сессия завершена.");return;}
             if(folderMode && receivedPath==null){
                 string name=Uri.UnescapeDataString(q.Headers["X-Name"]??"").Trim();
                 if(name.Length==0 || name.Length>215 || name.StartsWith(".") || name.EndsWith(".") || name.IndexOfAny(Path.GetInvalidFileNameChars())>=0 || Regex.IsMatch(name,@"^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³]) *(\.|$)",RegexOptions.IgnoreCase)){
@@ -190,9 +246,19 @@ public sealed class Session : IDisposable {
                 if(name.Equals("desktop.ini",StringComparison.OrdinalIgnoreCase)||name.Equals("autorun.inf",StringComparison.OrdinalIgnoreCase)) name="Полученный "+name;
                 receivedPath=Path.Combine(path,name);
             }
-            using(var f=new FileStream(partial,FileMode.OpenOrCreate,FileAccess.Write,FileShare.None)){f.Position=at;f.Write(data,0,used);f.SetLength(at+used);}
+            if(staging==null){
+                staging=new FileStream(partial,ownsPartial?FileMode.Open:FileMode.CreateNew,FileAccess.Write,FileShare.None);
+                ownsPartial=true;
+            }
+            staging.Position=at;staging.Write(data,0,used);staging.SetLength(at+used);
             previousOffset=at;previousCount=used;previousDigest=q.Headers["X-SHA256"];offset+=used;total=size;
-            if(offset==size){try{if(folderMode)SaveInFolder();else File.Move(partial,path);complete=true;}catch{previousOffset=-1;offset=at;throw;}}
+            if(offset==size){
+                try{
+                    staging.Dispose();staging=null;
+                    if(folderMode)SaveInFolder();else File.Move(partial,path);
+                    ownsPartial=false;complete=true;
+                }catch{previousOffset=-1;offset=at;throw;}
+            }
             Reply(c,200,offset.ToString(CultureInfo.InvariantCulture));
         }
     }
@@ -205,9 +271,21 @@ public sealed class Session : IDisposable {
         }
     }
     public string Status { get {if(Collect){lock(uploads){int n=0;foreach(var child in uploads.Values)if(child.complete)n++;return "Сохранено файлов: "+n+" / "+uploads.Count;}}return complete?"Сохранено: "+(receivedPath??path):(receiving && total>=0?"Получено "+Interlocked.Read(ref offset).ToString("N0")+" байт":null);} }
-    public void Dispose(){closed=true;lock(uploads){foreach(var child in uploads.Values)child.Dispose();uploads.Clear();}try{listener.Stop();}catch{} foreach(var source in sources)source.Dispose();
-        if(receiving) ThreadPool.QueueUserWorkItem(delegate{lock(uploadLock){try{File.Delete(partial);}catch{}}});}
+    public void Dispose(){
+        lock(clients){
+            if(closed)return;
+            closed=true;if(listener!=null)listener.Stop();
+            foreach(var client in clients)client.Close();
+        }
+        lock(uploads){foreach(var child in uploads.Values)child.Dispose();uploads.Clear();}
+        foreach(var source in sources)source.Dispose();
+        if(receiving)lock(uploadLock){
+            if(staging!=null){staging.Dispose();staging=null;}
+            if(ownsPartial)try{File.Delete(partial);}catch(IOException){}catch(UnauthorizedAccessException){}
+        }
+    }
 }
+
 
 
 

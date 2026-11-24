@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.IO.Compression;
 using System.Diagnostics;
@@ -54,6 +54,10 @@ internal static class Extras {
 // Byte ranges in a deterministic ZIP stream. Skipped data is read locally for CRC calculation.
 internal sealed class RangeSink:Stream{
     readonly Stream dest;long skip,left; public int LastWrite {get;private set;} public long PayloadOverlap(long size){return Math.Max(0,Math.Min(left,size-skip));} public RangeSink(Stream d,long start,long count){dest=d;skip=start;left=count;}
+    internal bool Finished {get{return left==0;}}
+    internal long SkipCachedPrefix(long available){
+        long skipped=Math.Min(skip,available);skip-=skipped;return skipped;
+    }
     public override void Write(byte[] b,int o,int n){int drop=(int)Math.Min(skip,n);skip-=drop;o+=drop;n-=drop;int send=(int)Math.Min(left,n);LastWrite=send;if(send>0){dest.Write(b,o,send);left-=send;}}
     public override bool CanRead{get{return false;}} public override bool CanWrite{get{return true;}} public override bool CanSeek{get{return false;}}
     public override long Length{get{throw new NotSupportedException();}}public override long Position{get{throw new NotSupportedException();}set{throw new NotSupportedException();}}

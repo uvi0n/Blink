@@ -14,7 +14,8 @@ using Microsoft.Win32;
 
 public class Entry {
     public string Path{get;set;} public string Name{get{return System.IO.Path.GetFileName(Path);}}
-    public string Size{get;set;}
+    public long Bytes{get;set;}
+    public string Size{get{return Session.SizeText(Bytes);}}
 }
 class Desk {
     readonly Window window;readonly System.Windows.Forms.NotifyIcon trayIcon;bool exitTray;
@@ -69,8 +70,18 @@ class Desk {
         window.PreviewDragOver+=delegate(object sender,DragEventArgs e){e.Effects=session==null&&!receive&&e.Data.GetDataPresent(DataFormats.FileDrop)?DragDropEffects.Copy:DragDropEffects.None;e.Handled=true;};
         window.Drop+=delegate(object sender,DragEventArgs e){if(!receive&&session==null&&e.Data.GetDataPresent(DataFormats.FileDrop))Add((string[])e.Data.GetData(DataFormats.FileDrop));};
         window.Closed+=delegate{timer.Stop();trayIcon.Dispose();End();foreach(var file in scratch)try{File.Delete(file);Directory.Delete(Path.GetDirectoryName(file));}catch(IOException){}};
-        timer.Tick+=delegate{if(session==null)return;T("Outgoing").Text=session.Outgoing;if(DateTime.UtcNow>=session.Expires){End();T("State").Text="Срок ссылки истёк.";}else if(session.Status!=null)T("State").Text=session.Status;};
+        timer.Tick+=delegate{if(session==null)return;T("Outgoing").Text=session.Outgoing;RefreshLive();if(DateTime.UtcNow>=session.Expires){End();T("State").Text="Срок ссылки истёк.";}else if(session.Status!=null)T("State").Text=session.Status;};
         preferences.CheckUpdates=CheckUpdates;window.ContentRendered+=async delegate{if(preferences.AutoUpdate)await CheckUpdates();};
+        window.PreviewKeyDown+=delegate(object sender,System.Windows.Input.KeyEventArgs e){
+            bool settings=Find<ContentControl>("SettingsHost").Content!=null;
+            if(e.Key==System.Windows.Input.Key.Escape&&settings){HideSettings();e.Handled=true;}
+            if(settings)return;
+            if(e.Key==System.Windows.Input.Key.O && System.Windows.Input.Keyboard.Modifiers==System.Windows.Input.ModifierKeys.Control && !receive && B("Add").IsEnabled){
+                B("Add").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));e.Handled=true;
+            }else if(e.Key==System.Windows.Input.Key.Delete && Queue.IsKeyboardFocusWithin && B("Remove").IsEnabled){
+                B("Remove").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));e.Handled=true;
+            }
+        };
         timer.Start();SetMode(false);
     }
     Link backup;string backupUrl;bool preparing;
@@ -97,10 +108,10 @@ class Desk {
     void HideSettings(){var host=Find<ContentControl>("SettingsHost");host.Content=null;host.Visibility=Visibility.Collapsed;Find<ScrollViewer>("TransferPage").Visibility=Visibility.Visible;}
     async void Add(string[] paths){foreach(string path in paths){if(Directory.Exists(path)){
             if(session!=null||preparing)continue;preparing=true;Sync();
-            try{string packed=await System.Threading.Tasks.Task.Run(()=>Extras.Prepare(path,false));scratch.Add(packed);files.Add(new Entry{Path=packed,Size=Session.SizeText(new FileInfo(packed).Length)});}
+            try{string packed=await System.Threading.Tasks.Task.Run(()=>Extras.Prepare(path,false));scratch.Add(packed);files.Add(new Entry{Path=packed,Bytes=new FileInfo(packed).Length});}
             catch(Exception e){T("State").Text=e.Message;}finally{preparing=false;Sync();}continue;
         }if(!File.Exists(path)||files.Any(x=>String.Equals(x.Path,path,StringComparison.OrdinalIgnoreCase)))continue;
-        try{files.Add(new Entry{Path=path,Size=Session.SizeText(new FileInfo(path).Length)});}catch(IOException ex){T("State").Text=ex.Message;}}
+        try{files.Add(new Entry{Path=path,Bytes=new FileInfo(path).Length});}catch(IOException ex){T("State").Text=ex.Message;}}
         Sync();
     }
     void SetMode(bool incoming){
@@ -113,10 +124,53 @@ class Desk {
     void Sync(){bool idle=session==null&&!preparing;foreach(string id in new[]{"FolderAdd","Encrypt","Unlock"})B(id).IsEnabled=idle;Find<CheckBox>("Approve").IsEnabled=Find<CheckBox>("Collect").IsEnabled=idle;B("Backup").Visibility=Show(session!=null);
         foreach(var n in new[]{"Add","SendTab","ReceiveTab","Browse","Desktop"})B(n).IsEnabled=idle;
         B("Create").IsEnabled=idle&&(receive?Directory.Exists(folder):files.Count>0);
-        B("Remove").IsEnabled=idle&&Queue.SelectedItems.Count>0;B("Remove").Visibility=Show(files.Count>0);
+        B("Remove").IsEnabled=idle&&Queue.SelectedItems.Count>0;B("Remove").Visibility=Show(Queue.SelectedItems.Count>0&&idle);
         T("Section").Text=receive?"Папка для получения":files.Count==0?"Подборка":"Подборка · "+files.Count;
-        T("FolderPath").Text=folder;T("DropHint").Visibility=Show(files.Count==0);
+        T("FolderPath").Text=folder;Find<StackPanel>("DropZone").Visibility=Show(files.Count==0);
+        RefreshOverview();RefreshLive();
         B("QrButton").Visibility=Address.Visibility=B("Copy").Visibility=Show(Address.Text.Length>0);B("Stop").Visibility=Show(!idle);
+    }
+    void RefreshLive(){
+        if(session==null || receive){Find<StackPanel>("LivePanel").Visibility=Visibility.Collapsed;return;}
+        var snapshot=session.TransferSnapshot;
+        bool show=snapshot.HasData && snapshot.Total>0;
+        Find<StackPanel>("LivePanel").Visibility=Show(show);
+        if(!show)return;
+        double share=Math.Min(1,(double)snapshot.Sent/snapshot.Total);
+        T("LiveCaption").Text=(snapshot.Active>0?"Активных скачиваний: "+snapshot.Active:"Последнее скачивание")+"   ·   "+(int)(100*share)+"%";
+        ((ScaleTransform)Find<Border>("LiveFill").RenderTransform).ScaleX=share;
+    }
+    static int FileGroup(string path){
+        switch(System.IO.Path.GetExtension(path).ToLowerInvariant()){
+            case ".png":case ".jpeg":case ".jpg":case ".gif":case ".webp":case ".tif":case ".heic":case ".bmp":case ".svg":return 0;
+            case ".mp4":case ".mov":case ".webm":case ".avi":case ".mkv":case ".m4v":return 1;
+            case ".zip":case ".7z":case ".rar":case ".gz":case ".tar":case ".age":return 2;
+            default:return 3;
+        }
+    }
+    void RefreshOverview(){
+        bool online=session!=null&&Address.Text.Length>0;
+        T("SessionPhase").Text=preparing?"Подготовка файлов":session==null?"Черновик":online?"Ссылка доступна":"Проверка соединения";
+        Find<System.Windows.Shapes.Ellipse>("StatusLamp").SetResourceReference(System.Windows.Shapes.Shape.FillProperty,online?"Accent":"Muted");
+        T("LinkExpiry").Text=session==null?"Срок ссылки · "+preferences.Hours+" ч":"Доступ до "+session.Expires.ToLocalTime().ToString("dd.MM, HH:mm");
+        long total=files.Sum(f=>f.Bytes);
+        T("SizeTotal").Text=receive||files.Count==0?"":Session.SizeText(total);
+        Find<StackPanel>("MixPanel").Visibility=Show(!receive&&total>0);
+        var bar=Find<Grid>("MixBar");var legend=Find<WrapPanel>("MixLegend");
+        bar.Children.Clear();bar.ColumnDefinitions.Clear();legend.Children.Clear();
+        if(receive||total==0)return;
+        var labels=new[]{"Фото","Видео","Архивы","Прочее"};
+        var paints=new[]{"#56BBA8","#829BE5","#C99CB6","#A6AA93"};
+        foreach(var group in files.GroupBy(f=>FileGroup(f.Path)).OrderByDescending(g=>g.Sum(f=>f.Bytes))){
+            long bytes=group.Sum(f=>f.Bytes);int index=group.Key;
+            string label=labels[index]+" · "+Session.SizeText(bytes);
+            var brush=Themes.Brush(paints[index]);int column=bar.ColumnDefinitions.Count;
+            bar.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength((double)bytes/total,GridUnitType.Star)});
+            var segment=new Border{Background=brush,ToolTip=label,Margin=new Thickness(0,0,1,0)};Grid.SetColumn(segment,column);bar.Children.Add(segment);
+            var key=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,12,2)};
+            key.Children.Add(new Border{Background=brush,Width=8,Height=8,CornerRadius=new CornerRadius(2),VerticalAlignment=VerticalAlignment.Center});
+            key.Children.Add(new TextBlock{Text=label,FontSize=13,Margin=new Thickness(5,0,0,0)});legend.Children.Add(key);
+        }
     }
     async void Start(){
         if(session!=null||preparing)return;Link current=null;
@@ -130,6 +184,8 @@ class Desk {
     }
     void End(){var spare=backup;backup=null;backupUrl=null;if(spare!=null)spare.Dispose();var old=link;if(session!=null)T("Outgoing").Text=receive?session.Status:session.Outgoing;link=null;if(old!=null)old.Dispose();if(session!=null)session.Dispose();session=null;if(pendingFolder!=null){folder=pendingFolder;pendingFolder=null;}Address.Clear();if(old!=null && T("Outgoing").Text.Length>0)T("Outgoing").Text="Итог передачи\n"+T("Outgoing").Text;Find<Image>("Qr").Source=null;Find<Image>("Qr").Visibility=Visibility.Collapsed;Sync();}
 }
+
+
 
 
 
