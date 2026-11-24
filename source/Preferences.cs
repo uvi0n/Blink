@@ -11,7 +11,7 @@ internal sealed class Preferences {
     public string Folder=Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
     public int Hours=12;
     public bool ConfirmClose=true,Tray;
-    public string Theme=Themes.Names[0];
+    public string Theme="Терминал";
     public string[] Colors=(string[])Themes.Defaults.Clone();
     internal static readonly string[] Accents={"Персик","Мята","Лаванда","Голубой"};
     public static Preferences Load(){

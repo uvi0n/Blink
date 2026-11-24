@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -12,7 +12,7 @@ sealed class Link : IDisposable {
     readonly CancellationTokenSource cancel=new CancellationTokenSource();
     readonly object gate=new object();
     Process child;
-    public Link(Session session){this.session=session;}
+    readonly string forced;public string Provider {get;private set;} public Link(Session session,string forced=null){this.session=session;this.forced=forced;}
     static bool Check(string root,string key){
         try{
             var req=(HttpWebRequest)WebRequest.Create(root+"/"+key+"/probe");
@@ -31,9 +31,9 @@ sealed class Link : IDisposable {
         for(int attempt=1;attempt<=3;attempt++){
             token.ThrowIfCancellationRequested();
             string ssh=Path.Combine(Environment.SystemDirectory,@"OpenSSH\ssh.exe");
-            bool alternative=attempt!=2 && File.Exists(ssh);
+            bool alternative=forced==null?attempt!=2 && File.Exists(ssh):forced=="localhost.run";
             string provider=alternative?"localhost.run":"Cloudflare";
-            update(null,"Проверяем "+provider+" · попытка "+attempt+" из 3");
+            Provider=provider;update(null,"Проверяем "+provider+" · попытка "+attempt+" из 3");
             string candidate=null;
             using(var p=new Process()){
                 string app=AppDomain.CurrentDomain.BaseDirectory;

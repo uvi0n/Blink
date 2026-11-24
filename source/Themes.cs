@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -30,10 +30,8 @@ internal static class Themes {
         var hero=(TextBlock)w.FindName("Hero");hero.FontFamily=new FontFamily(i==2?"Georgia":i==3?"Arial Black":w.FontFamily.Source);
         hero.FontSize=new[]{34,34,43,40,30,37}[i];hero.FontWeight=i==3?FontWeights.Black:FontWeights.SemiBold;
         var header=(StackPanel)w.FindName("Navigation");
-        bool side=i==0&&(w.ActualWidth>0?w.ActualWidth:w.Width)>=760;
-        DockPanel.SetDock(header,side?Dock.Left:Dock.Top);header.Orientation=side?Orientation.Vertical:Orientation.Horizontal;
-        header.Margin=side?new Thickness(0,4,24,0):new Thickness(0,0,0,16);
-        var nav=(WrapPanel)w.FindName("Tabs");nav.Orientation=side?Orientation.Vertical:Orientation.Horizontal;nav.Margin=side?new Thickness(0,22,0,0):new Thickness(20,0,0,0);
+        DockPanel.SetDock(header,Dock.Top);header.Orientation=Orientation.Horizontal;header.Margin=new Thickness(0,0,0,16);
+        var nav=(WrapPanel)w.FindName("Tabs");nav.Orientation=Orientation.Horizontal;nav.Margin=new Thickness(20,0,0,0);
         var grid=(Grid)w.FindName("Workspace");var selection=(Border)w.FindName("SelectionCard");var link=(Border)w.FindName("LinkCard");
         bool split=(i==2||i==3||i==4) && (w.ActualWidth>0?w.ActualWidth:w.Width)>=800;
         grid.ColumnDefinitions[1].Width=new GridLength(split?.78:0,GridUnitType.Star);

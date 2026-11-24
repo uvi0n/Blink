@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -21,6 +21,22 @@ public sealed class Session : IDisposable {
     readonly Transfers transfers=new Transfers();
     public string Outgoing {get{return transfers.Summary();}}
     public readonly string Local, Key;
+    public Func<string,bool> Authorize;public bool Collect;
+    readonly System.Collections.Generic.HashSet<string> approved=new System.Collections.Generic.HashSet<string>();
+    readonly System.Collections.Generic.Dictionary<string,Session> uploads=new System.Collections.Generic.Dictionary<string,Session>();
+    int asking;
+    static string Token(){byte[] b=new byte[24];using(var g=RandomNumberGenerator.Create())g.GetBytes(b);return BitConverter.ToString(b).Replace("-","");}
+    bool Gate(LocalContext c,string route){
+        if(Authorize==null || route=="probe")return true;
+        string cookie=c.Request.Headers["Cookie"]??"";
+        var match=Regex.Match(cookie,@"(?:^|; *)blinkgrant=([A-F0-9]{48})(?:;|$)");
+        lock(approved)if(match.Success&&approved.Contains(match.Groups[1].Value))return true;
+        if(route=="request" && c.Request.HttpMethod=="POST" && match.Success && Interlocked.CompareExchange(ref asking,1,0)==0){
+            try{if(Authorize(match.Groups[1].Value.Substring(0,8))){lock(approved)approved.Add(match.Groups[1].Value);c.Response.Headers["Location"]="./";Reply(c,303,"");return false;}}finally{Interlocked.Exchange(ref asking,0);}
+        }
+        string token=Token();c.Response.Headers["Set-Cookie"]="blinkgrant="+token+"; Secure; HttpOnly; SameSite=Strict; Path=/"+Key+"/";
+        Reply(c,403,"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><h1>Blink · Подтверждение</h1><p>Сообщите отправителю код "+token.Substring(0,8)+"</p><form method=post action='/"+Key+"/request'><button>Запросить доступ</button></form>","text/html; charset=utf-8");return false;
+    }
     public readonly DateTime Expires;
     public Session(string file, bool receive) : this(new[]{file},receive) {}
     public Session(string[] files, bool receive,int hours=12) {
@@ -54,10 +70,16 @@ public sealed class Session : IDisposable {
         var q=c.Request;var r=c.Response;
         r.Headers["Cache-Control"]="private, no-store";r.Headers["Referrer-Policy"]="no-referrer";
         r.Headers["X-Content-Type-Options"]="nosniff";r.Headers["X-Frame-Options"]="DENY";
-        r.Headers["Content-Security-Policy"]="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+        r.Headers["Content-Security-Policy"]="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
         string prefix="/"+Key+"/", url=q.Path;
         if(closed || DateTime.UtcNow>=Expires || !url.StartsWith(prefix,StringComparison.Ordinal)){Reply(c,404,"Ссылка недоступна.");return;}
         string route=url.Substring(prefix.Length);
+        if(!Gate(c,route))return;
+        if(Collect && q.HttpMethod=="POST"){
+            if(route=="new-upload"){lock(uploads){if(closed){Reply(c,410,"");return;}if(uploads.Count>=128){Reply(c,429,"Лимит этой сессии исчерпан.");return;}string id=Token();uploads.Add(id,new Session(path,true));Reply(c,200,id);}return;}
+            if(route.StartsWith("chunk/")){Session child;lock(uploads)uploads.TryGetValue(route.Substring(6),out child);if(child==null){Reply(c,404,"");return;}child.Upload(c);return;}
+            if(route=="chunk"){Reply(c,400,"Начните новую загрузку.");return;}
+        }
         if(receiving && route=="chunk" && q.HttpMethod=="POST"){Upload(c);return;}
         if(!receiving && route=="selected.zip" && q.HttpMethod=="POST"){
             if(q.ContentLength64<1 || q.ContentLength64>sources.Count*24L || q.ContentLength64>int.MaxValue){Reply(c,400,"Выберите файлы.");return;}
@@ -67,18 +89,28 @@ public sealed class Session : IDisposable {
             foreach(string pair in Encoding.ASCII.GetString(data).Split('&')){
                 int id;if(!pair.StartsWith("id=")||!int.TryParse(pair.Substring(3),NumberStyles.None,CultureInfo.InvariantCulture,out id)||id>=sources.Count){Reply(c,400,"Неверный выбор файлов.");return;}ids.Add(id);
             }
-            SendBundle(c,System.Linq.Enumerable.Select(ids,id=>sources[id]));return;
+            string spec=String.Join(",",ids);
+            if(spec.Length<=7500){r.Headers["Location"]="./selection/"+spec+"/Blink.zip";Reply(c,303,"");}else SendBundle(c,System.Linq.Enumerable.Select(ids,id=>sources[id]));return;
         }
         if(q.HttpMethod!="GET" && q.HttpMethod!="HEAD"){Reply(c,405,"");return;}
         if(route==""){
             var list=new StringBuilder();
             for(int i=0;i<sources.Count;i++){
                 var item=sources[i];
-                list.Append("<li><input type=checkbox name=id form=selection aria-label=\"Выбрать: ").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("\" value=").Append(i).Append("><div><strong>").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("</strong><small>").Append(SizeText(item.Length)).Append("</small></div><a download href='file/").Append(i).Append("'>Скачать</a></li>");
+                string ext=Path.GetExtension(item.Name).ToLowerInvariant();string thumb=(item.Length<=32*1024*1024 && (ext==".jpg"||ext==".jpeg"||ext==".png"))?"<img loading=lazy width=60 alt='' src='thumb/"+i+"'>":"";
+                list.Append("<li>").Append(thumb).Append("<input type=checkbox name=id form=selection aria-label=\"Выбрать: ").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("\" value=").Append(i).Append("><div><strong>").Append(WebUtility.HtmlEncode(Path.GetFileName(item.Name))).Append("</strong><small>").Append(SizeText(item.Length)).Append("</small></div><a download href='file/").Append(i).Append("'>Скачать</a></li>");
             }
-            string html=Resource("page.html").Replace("@MODE@",receiving?"receive":"send").Replace("@FILES@",list.ToString()).Replace("@TARGET@",folderMode?"Исходное имя файла":WebUtility.HtmlEncode(Path.GetFileName(path)));
+            string html=Resource("page.html").Replace("@COLLECT@",Collect?"yes":"no").Replace("@MODE@",receiving?"receive":"send").Replace("@FILES@",list.ToString()).Replace("@TARGET@",folderMode?"Исходное имя файла":WebUtility.HtmlEncode(Path.GetFileName(path)));
             Reply(c,200,html,"text/html; charset=utf-8");
+        } else if(!receiving && route.StartsWith("thumb/")){
+            int i;if(!int.TryParse(route.Substring(6),out i)||i<0||i>=sources.Count||sources[i].Length>32*1024*1024||!Regex.IsMatch(sources[i].Name,@"\.(png|jpe?g)$",RegexOptions.IgnoreCase)){Reply(c,404,"");return;}
+            byte[] bytes=Extras.Thumbnail(sources[i].Name);r.ContentType="image/jpeg";r.ContentLength64=bytes.Length;if(q.HttpMethod!="HEAD")r.OutputStream.Write(bytes,0,bytes.Length);r.Close();
         } else if(route=="ui.js") Reply(c,200,Resource("ui.js"),"application/javascript; charset=utf-8");
+        else if(!receiving && route.StartsWith("selection/") && route.EndsWith("/Blink.zip")){
+            string[] pieces=route.Split('/');if(pieces.Length!=3){Reply(c,404,"");return;}
+            var ids=new System.Collections.Generic.SortedSet<int>();foreach(string part in pieces[1].Split(',')){int id;if(!Int32.TryParse(part,NumberStyles.None,CultureInfo.InvariantCulture,out id)||id>=sources.Count){Reply(c,404,"");return;}ids.Add(id);}
+            SendBundle(c,System.Linq.Enumerable.Select(ids,id=>sources[id]));
+        }
         else if(!receiving && route=="all.zip"){
             SendBundle(c,sources);
         }
@@ -92,10 +124,16 @@ public sealed class Session : IDisposable {
     }
     void SendBundle(LocalContext c,System.Collections.Generic.IEnumerable<FileStream> files){
         var bundle=new Bundle(files);var r=c.Response;r.ContentType="application/zip";r.Headers["Content-Disposition"]="attachment; filename=Blink.zip";r.ContentLength64=bundle.Length;
+        long first=0,last=bundle.Length-1;r.Headers["Accept-Ranges"]="bytes";r.Headers["ETag"]="\""+Key+"-zip\"";
+        string range=c.Request.Headers["Range"];if(range!=null){
+            var m=Regex.Match(range,@"^bytes=(\d+)-(\d*)$");long end;
+            if(!m.Success||!long.TryParse(m.Groups[1].Value,out first)||first>=bundle.Length||(m.Groups[2].Length>0&&(!long.TryParse(m.Groups[2].Value,out end)||end<first))){r.Headers["Content-Range"]="bytes */"+bundle.Length;Reply(c,416,"");return;}
+            if(m.Groups[2].Length>0)last=Math.Min(last,long.Parse(m.Groups[2].Value));r.StatusCode=206;r.ContentLength64=last-first+1;r.Headers["Content-Range"]="bytes "+first+"-"+last+"/"+bundle.Length;
+        }
         if(c.Request.HttpMethod=="HEAD"){r.Close();return;}
-        var t=transfers.Begin("Архив",bundle.PayloadSize);bool done=false;
-        try{bundle.Send(r.OutputStream,()=>!closed && DateTime.UtcNow<Expires,(name,n)=>transfers.Report(t,name,n));r.Close();done=true;}
-        finally{transfers.End(t,done);}
+        RangeSink slice=range==null?null:new RangeSink(r.OutputStream,first,last-first+1);var sizes=new System.Collections.Generic.Queue<long>(System.Linq.Enumerable.Select(files,f=>f.Length));Transfers.Item entry=null;bool done=false;
+        try{bundle.Send((Stream)slice??r.OutputStream,()=>!closed && DateTime.UtcNow<Expires,(name,n)=>{if(n==0){if(entry!=null)transfers.End(entry,true);long size=sizes.Dequeue();long visible=slice==null?size:slice.PayloadOverlap(size);entry=(slice==null||visible>0)?transfers.Begin(name+(range==null?"":" (докачка ZIP)"),visible):null;}else if(entry!=null)transfers.Report(entry,entry.Name,slice==null?n:slice.LastWrite);});r.Close();done=true;}
+        finally{if(entry!=null)transfers.End(entry,done);}
     }
     static string Resource(string name) { using(var s=typeof(Session).Assembly.GetManifestResourceStream(name)) using(var reader=new StreamReader(s))return reader.ReadToEnd(); }
     public static string SizeText(long bytes){
@@ -166,10 +204,13 @@ public sealed class Session : IDisposable {
             target=Path.Combine(path,Path.GetFileNameWithoutExtension(receivedPath)+" ("+suffix+")"+Path.GetExtension(receivedPath));
         }
     }
-    public string Status { get {return complete?"Сохранено: "+(receivedPath??path):(receiving && total>=0?"Получено "+Interlocked.Read(ref offset).ToString("N0")+" байт":null);} }
-    public void Dispose(){closed=true;try{listener.Stop();}catch{} foreach(var source in sources)source.Dispose();
+    public string Status { get {if(Collect){lock(uploads){int n=0;foreach(var child in uploads.Values)if(child.complete)n++;return "Сохранено файлов: "+n+" / "+uploads.Count;}}return complete?"Сохранено: "+(receivedPath??path):(receiving && total>=0?"Получено "+Interlocked.Read(ref offset).ToString("N0")+" байт":null);} }
+    public void Dispose(){closed=true;lock(uploads){foreach(var child in uploads.Values)child.Dispose();uploads.Clear();}try{listener.Stop();}catch{} foreach(var source in sources)source.Dispose();
         if(receiving) ThreadPool.QueueUserWorkItem(delegate{lock(uploadLock){try{File.Delete(partial);}catch{}}});}
 }
+
+
+
 
 
 
