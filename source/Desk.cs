@@ -26,7 +26,7 @@ class Desk {
     [STAThread] static void Main(string[] args){
         if(args.Length==1 && args[0]=="--install-sendto"){
             try{dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));dynamic shortcut=shell.CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.SendTo),"Blink.lnk"));
-            shortcut.TargetPath=typeof(Desk).Assembly.Location;shortcut.WorkingDirectory=AppDomain.CurrentDomain.BaseDirectory;shortcut.Save();MessageBox.Show("Blink добавлен в меню «Отправить».","Blink");}catch(Exception ex){MessageBox.Show(ex.Message,"Blink");}return;}
+            shortcut.TargetPath=Boot.Root()==null?typeof(Desk).Assembly.Location:Path.Combine(Boot.Root(),"Blink.exe");shortcut.WorkingDirectory=AppDomain.CurrentDomain.BaseDirectory;shortcut.Save();MessageBox.Show("Blink добавлен в меню «Отправить».","Blink");}catch(Exception ex){MessageBox.Show(ex.Message,"Blink");}return;}
         ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12;
         var app=new Application();var desk=new Desk();desk.Add(args);app.Run(desk.window);
     }
@@ -70,6 +70,7 @@ class Desk {
         window.Drop+=delegate(object sender,DragEventArgs e){if(!receive&&session==null&&e.Data.GetDataPresent(DataFormats.FileDrop))Add((string[])e.Data.GetData(DataFormats.FileDrop));};
         window.Closed+=delegate{timer.Stop();trayIcon.Dispose();End();foreach(var file in scratch)try{File.Delete(file);Directory.Delete(Path.GetDirectoryName(file));}catch(IOException){}};
         timer.Tick+=delegate{if(session==null)return;T("Outgoing").Text=session.Outgoing;if(DateTime.UtcNow>=session.Expires){End();T("State").Text="Срок ссылки истёк.";}else if(session.Status!=null)T("State").Text=session.Status;};
+        preferences.CheckUpdates=CheckUpdates;window.ContentRendered+=async delegate{if(preferences.AutoUpdate)await CheckUpdates();};
         timer.Start();SetMode(false);
     }
     Link backup;string backupUrl;bool preparing;
@@ -84,6 +85,11 @@ class Desk {
         if(preparing||session!=null)return;if(encrypt&&files.Count>0&&MessageBox.Show(window,"Заменить подборку только зашифрованным файлом?","Blink",MessageBoxButton.YesNo)!=MessageBoxResult.Yes)return;preparing=true;Sync();
         try{string result=await System.Threading.Tasks.Task.Run(()=>Extras.Prepare(path,encrypt));scratch.Add(result);if(encrypt)files.Clear();Add(new[]{result});T("State").Text="Добавлено: "+Path.GetFileName(result);}
         catch(Exception e){T("State").Text=e.Message;}finally{preparing=false;Sync();}
+    }
+    System.Threading.Tasks.Task<string> checking;
+    async System.Threading.Tasks.Task<string> CheckUpdates(){
+        if(checking==null||checking.IsCompleted)checking=System.Threading.Tasks.Task.Run(()=>Updates.Check());
+        try{return await checking;}catch(Exception ex){return "Обновление недоступно: "+ex.Message;}
     }
     void Restore(){window.Show();window.WindowState=WindowState.Normal;window.Activate();trayIcon.Visible=false;}
     void ApplyAccent(){Themes.Apply(window,preferences);RefreshTabs();}
@@ -124,6 +130,7 @@ class Desk {
     }
     void End(){var spare=backup;backup=null;backupUrl=null;if(spare!=null)spare.Dispose();var old=link;if(session!=null)T("Outgoing").Text=receive?session.Status:session.Outgoing;link=null;if(old!=null)old.Dispose();if(session!=null)session.Dispose();session=null;if(pendingFolder!=null){folder=pendingFolder;pendingFolder=null;}Address.Clear();if(old!=null && T("Outgoing").Text.Length>0)T("Outgoing").Text="Итог передачи\n"+T("Outgoing").Text;Find<Image>("Qr").Source=null;Find<Image>("Qr").Visibility=Visibility.Collapsed;Sync();}
 }
+
 
 
 
