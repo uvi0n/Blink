@@ -9,7 +9,7 @@ using System.Text.RegularExpressions;
 [assembly: System.Reflection.AssemblyProduct("Blink")]
 
 internal static class Boot {
-    public const string Current="9.0.0";
+    public const string Current="9.1.0";
     public static string Active(string root){
         string s=File.ReadAllText(Path.Combine(root,"version.txt")).Trim();
         if(!Regex.IsMatch(s,@"^[0-9]+\.[0-9]+\.[0-9]+$"))throw new IOException("Неверный номер сборки Blink.");

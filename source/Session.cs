@@ -243,19 +243,30 @@ public sealed class Session : IDisposable {
             r.Close();done=true;
         }finally{transfers.End(t,done);}
     }
+    const int MaxChunkBytes=4*1024*1024;
+    static readonly System.ServiceModel.Channels.BufferManager uploadBuffers=
+        System.ServiceModel.Channels.BufferManager.CreateBufferManager(2L*MaxChunkBytes,MaxChunkBytes);
+
     void Upload(LocalContext c) {
         lock(uploadLock){
             var q=c.Request;long at,size, count=q.ContentLength64;
             if(!closed && long.TryParse(q.Headers["X-Offset"],out at) && at==previousOffset && previousOffset>=0 && count==previousCount && long.TryParse(q.Headers["X-Size"],out size) && size==total && String.Equals(q.Headers["X-SHA256"],previousDigest,StringComparison.OrdinalIgnoreCase)){
                 byte[] discard=new byte[65536];long left=count;while(left>0){int read=q.InputStream.Read(discard,0,(int)Math.Min(left,discard.Length));if(read==0)throw new IOException();left-=read;} Reply(c,200,offset.ToString(CultureInfo.InvariantCulture));return;
             }
-            if(closed||complete||!long.TryParse(q.Headers["X-Offset"],out at)||!long.TryParse(q.Headers["X-Size"],out size)||size<0||at!=offset||count<0||count>4194304||count>size-at||(count==0&&size!=0)||(total!=-1&&total!=size)){
+            if(closed||complete||!long.TryParse(q.Headers["X-Offset"],out at)||!long.TryParse(q.Headers["X-Size"],out size)||size<0||at!=offset||count<0||count>MaxChunkBytes||count>size-at||(count==0&&size!=0)||(total!=-1&&total!=size)){
                 Reply(c,409,"Передача занята или смещение изменилось.");return;
             }
             if(Path.GetPathRoot(path).Length==3 && new DriveInfo(Path.GetPathRoot(path)).AvailableFreeSpace-67108864<size-at){Reply(c,507,"Недостаточно места на компьютере.");return;}
-            byte[] data=new byte[(int)count];int used=0;
-            while(used<data.Length){int n=q.InputStream.Read(data,used,data.Length-used);if(n==0){Reply(c,400,"Неполный блок.");return;}used+=n;}
-            using(var hash=SHA256.Create()) if(!String.Equals(BitConverter.ToString(hash.ComputeHash(data)).Replace("-",""),q.Headers["X-SHA256"],StringComparison.OrdinalIgnoreCase)){Reply(c,400,"Ошибка проверки блока.");return;}
+            byte[] data=uploadBuffers.TakeBuffer((int)count);
+            try { AcceptChunk(c,at,size,(int)count,data); }
+            finally { uploadBuffers.ReturnBuffer(data); }
+        }
+    }
+    void AcceptChunk(LocalContext c,long at,long size,int count,byte[] data) {
+            var q=c.Request;
+            int used=0;
+            while(used<count){int n=q.InputStream.Read(data,used,count-used);if(n==0){Reply(c,400,"Неполный блок.");return;}used+=n;}
+            using(var hash=new SHA256Cng()) if(!String.Equals(BitConverter.ToString(hash.ComputeHash(data,0,used)).Replace("-",""),q.Headers["X-SHA256"],StringComparison.OrdinalIgnoreCase)){Reply(c,400,"Ошибка проверки блока.");return;}
             if(closed || DateTime.UtcNow>=Expires){Reply(c,410,"Сессия завершена.");return;}
             if(folderMode && receivedPath==null){
                 string name=Uri.UnescapeDataString(q.Headers["X-Name"]??"").Trim();
@@ -269,7 +280,9 @@ public sealed class Session : IDisposable {
                 staging=new FileStream(partial,ownsPartial?FileMode.Open:FileMode.CreateNew,FileAccess.Write,FileShare.None);
                 ownsPartial=true;
             }
-            staging.Position=at;staging.Write(data,0,used);staging.SetLength(at+used);
+            if(staging.Position!=at)staging.Position=at;
+            staging.Write(data,0,used);
+            if(at+used==size && staging.Length!=size)staging.SetLength(size);
             previousOffset=at;previousCount=used;previousDigest=q.Headers["X-SHA256"];offset+=used;total=size;
             if(offset==size){
                 try{
@@ -279,7 +292,6 @@ public sealed class Session : IDisposable {
                 }catch{previousOffset=-1;offset=at;throw;}
             }
             Reply(c,200,offset.ToString(CultureInfo.InvariantCulture));
-        }
     }
     void SaveInFolder(){
         string target=receivedPath;
