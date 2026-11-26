@@ -12,7 +12,7 @@ internal sealed class Preferences {
     public int Hours=12;
     public bool ConfirmClose=true,Tray,AutoUpdate=true;
     public Func<System.Threading.Tasks.Task<string>> CheckUpdates;
-    public string Theme="Терминал";
+    public string Theme="Полярная ночь";
     public string[] Colors=(string[])Themes.Defaults.Clone();
     internal static readonly string[] Accents={"Персик","Мята","Лаванда","Голубой"};
     public static Preferences Load(){

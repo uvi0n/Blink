@@ -39,5 +39,9 @@ sealed class LocalResponse {
 }
 sealed class LocalContext {
     public LocalRequest Request;public LocalResponse Response;
-    public LocalContext(TcpClient c){Request=new LocalRequest(c.GetStream());Response=new LocalResponse(c);}
+    public LocalContext(TcpClient c){
+        // The request body must use the same buffer as the headers, including any bytes read ahead.
+        Request=new LocalRequest(new BufferedStream(c.GetStream(),8192));
+        Response=new LocalResponse(c);
+    }
 }

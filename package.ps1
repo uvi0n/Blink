@@ -7,6 +7,12 @@ $root = $PSScriptRoot
 $tools = (Resolve-Path -LiteralPath $ToolsDirectory).Path
 $output = [IO.Path]::GetFullPath($OutputZip)
 $stage = "$output.$([Guid]::NewGuid().ToString('N')).tmp"
+Push-Location (Join-Path $root 'native')
+try {
+    & cargo build --locked --release
+    if ($LASTEXITCODE) { throw 'Rust build failed' }
+} finally { Pop-Location }
+if ($env:BLINK_MANAGED_ONLY -eq '1') { throw 'Release packages require the Rust core' }
 & (Join-Path $root 'source/build.cmd')
 if ($LASTEXITCODE) { throw 'Blink build failed' }
 $versionSource = Get-Content (Join-Path $root 'source/Boot.cs') -Raw
@@ -25,6 +31,7 @@ try {
             Add-File $zip (Join-Path $root $name) "Blink/$name"
         }
         Add-File $zip (Join-Path $root 'docs/download.md') 'Blink/Инструкция.txt'
+        Add-File $zip (Join-Path $root 'native/THIRD-PARTY.txt') 'Blink/Rust-LICENSES.txt'
         foreach ($name in 'Blink.exe','Blink.exe.config','QRCoder.dll','lhr_hosts') {
             Add-File $zip (Join-Path $root $name) "Blink/builds/$version/$name"
         }

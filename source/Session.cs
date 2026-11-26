@@ -187,8 +187,22 @@ public sealed class Session : IDisposable {
             if(m.Groups[2].Length>0)last=Math.Min(last,long.Parse(m.Groups[2].Value));r.StatusCode=206;r.ContentLength64=last-first+1;r.Headers["Content-Range"]="bytes "+first+"-"+last+"/"+bundle.Length;
         }
         if(c.Request.HttpMethod=="HEAD"){r.Close();return;}
-        RangeSink slice=range==null?null:new RangeSink(r.OutputStream,first,last-first+1);var sizes=new System.Collections.Generic.Queue<long>(System.Linq.Enumerable.Select(files,f=>f.Length));Transfers.Item entry=null;bool done=false;
-        try{bundle.Send((Stream)slice??r.OutputStream,()=>!closed && DateTime.UtcNow<Expires,(name,n)=>{if(n==0){if(entry!=null)transfers.End(entry,true);long size=sizes.Dequeue();long visible=slice==null?size:slice.PayloadOverlap(size);entry=(slice==null||visible>0)?transfers.Begin(name+(range==null?"":" (докачка ZIP)"),visible):null;}else if(entry!=null)transfers.Report(entry,entry.Name,slice==null?n:slice.LastWrite);});r.Close();done=true;}
+        // Collect short ZIP metadata writes before sending them through the tunnel.
+        var output=new BufferedStream(r.OutputStream,32768);
+        var slice=range==null?null:new RangeSink(output,first,last-first+1);
+        var sizes=new System.Collections.Generic.Queue<long>(System.Linq.Enumerable.Select(files,f=>f.Length));
+        Transfers.Item entry=null;bool done=false;
+        try {
+            bundle.Send((Stream)slice??output,()=>!closed && DateTime.UtcNow<Expires,(name,n)=>{
+                if(n==0){
+                    if(entry!=null)transfers.End(entry,true);
+                    long size=sizes.Dequeue();
+                    long visible=slice==null?size:slice.PayloadOverlap(size);
+                    entry=(slice==null||visible>0)?transfers.Begin(name+(range==null?"":" (докачка ZIP)"),visible):null;
+                } else if(entry!=null)transfers.Report(entry,entry.Name,slice==null?n:slice.LastWrite);
+            });
+            output.Flush();r.Close();done=true;
+        }
         finally{if(entry!=null)transfers.End(entry,done);}
     }
     static string Resource(string name) { using(var s=typeof(Session).Assembly.GetManifestResourceStream(name)) using(var reader=new StreamReader(s))return reader.ReadToEnd(); }
@@ -218,11 +232,16 @@ public sealed class Session : IDisposable {
         long remaining=last-first+1;r.ContentLength64=remaining;r.ContentType="application/octet-stream";
         if(c.Request.HttpMethod=="HEAD"){r.Close();return;}
         var t=transfers.Begin(Path.GetFileName(path),remaining);bool done=false;
-        try{using(var input=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){
-            input.Position=first;byte[] buf=new byte[65536];
-            while(remaining>0 && !closed && DateTime.UtcNow<Expires){int n=input.Read(buf,0,(int)Math.Min(remaining,buf.Length));if(n==0)break;r.OutputStream.Write(buf,0,n);remaining-=n;transfers.Report(t,t.Name,n);}
-        }
-        r.Close();done=remaining==0;}finally{transfers.End(t,done);}
+        try {
+            uint unused;
+            var output=r.OutputStream;
+            TransferReader.Read(source,first,remaining,false,new byte[TransferReader.BufferSize],(buffer,count)=>{
+                if(closed||DateTime.UtcNow>=Expires)throw new IOException("Передача закрыта.");
+                output.Write(buffer,0,count);transfers.Report(t,t.Name,count);
+                return true;
+            },out unused);
+            r.Close();done=true;
+        }finally{transfers.End(t,done);}
     }
     void Upload(LocalContext c) {
         lock(uploadLock){

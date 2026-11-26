@@ -59,6 +59,22 @@ class Desk {
             if(preferences.Tray&&!exitTray){e.Cancel=true;trayIcon.Visible=true;window.Hide();return;}
             if(session!=null && preferences.ConfirmClose)e.Cancel=MessageBox.Show(window,"Закрыть приложение и отозвать действующую ссылку?","Blink",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes;
         };
+        B("NewTransfer").Click+=delegate{try{Process.Start(typeof(Desk).Assembly.Location);}catch(Exception ex){MessageBox.Show(window,ex.Message,"Blink");}};
+        B("Bug").Click+=delegate{
+            var menuBug=new ContextMenu();
+            var mail=new MenuItem{Header="Написать на prusenkodanila@gmail.com"};
+            mail.Click+=delegate{
+                string uri="mailto:prusenkodanila@gmail.com?subject="+Uri.EscapeDataString("Ошибка в Blink "+Boot.Current)+"&body="+Uri.EscapeDataString("Что произошло?\r\n\r\nКак повторить?\r\n\r\nОжидаемый результат\r\n\r\nВерсия Blink "+Boot.Current);
+                try{Process.Start(new ProcessStartInfo(uri){UseShellExecute=true});}catch{MessageBox.Show(window,"Откройте свою почту и напишите на prusenkodanila@gmail.com.","Нашёл баг");}
+            };
+            menuBug.Items.Add(mail);menuBug.PlacementTarget=B("Bug");menuBug.IsOpen=true;
+        };
+        Queue.AddHandler(Button.ClickEvent,new RoutedEventHandler(delegate(object sender,RoutedEventArgs e){
+            var button=e.OriginalSource as Button;
+            if(button!=null && button.Tag as string=="RemoveEntry" && session==null && !preparing){
+                var entry=button.DataContext as Entry;if(entry!=null)files.Remove(entry);Sync();e.Handled=true;
+            }
+        }));
         Queue.ItemsSource=files;Queue.SelectionChanged+=delegate{Sync();};
         B("SendTab").Click+=delegate{SetMode(false);};B("ReceiveTab").Click+=delegate{SetMode(true);};
         B("Add").Click+=delegate{var d=new OpenFileDialog{Multiselect=true,Title="Добавить файлы"};if(d.ShowDialog(window)==true)Add(d.FileNames);};
@@ -121,7 +137,7 @@ class Desk {
         T("Hint").Text=incoming?"Получатель ссылки сможет отправить один файл на ваш компьютер.":"Соберите подборку и отправьте её одной ссылкой.";
         T("State").Text="Ссылка появится после проверки соединения.";Sync();
     }
-    void Sync(){bool idle=session==null&&!preparing;foreach(string id in new[]{"FolderAdd","Encrypt","Unlock"})B(id).IsEnabled=idle;Find<CheckBox>("Approve").IsEnabled=Find<CheckBox>("Collect").IsEnabled=idle;B("Backup").Visibility=Show(session!=null);
+    void Sync(){bool idle=session==null&&!preparing;Queue.IsEnabled=idle;foreach(string id in new[]{"FolderAdd","Encrypt","Unlock"})B(id).IsEnabled=idle;Find<CheckBox>("Approve").IsEnabled=Find<CheckBox>("Collect").IsEnabled=idle;B("Backup").Visibility=Show(session!=null);
         foreach(var n in new[]{"Add","SendTab","ReceiveTab","Browse","Desktop"})B(n).IsEnabled=idle;
         B("Create").IsEnabled=idle&&(receive?Directory.Exists(folder):files.Count>0);
         B("Remove").IsEnabled=idle&&Queue.SelectedItems.Count>0;B("Remove").Visibility=Show(Queue.SelectedItems.Count>0&&idle);
@@ -150,7 +166,7 @@ class Desk {
     }
     void RefreshOverview(){
         bool online=session!=null&&Address.Text.Length>0;
-        T("SessionPhase").Text=preparing?"Подготовка файлов":session==null?"Черновик":online?"Ссылка доступна":"Проверка соединения";
+        T("SessionPhase").Text=preparing?"Подготовка файлов":session==null?"Подготовка передачи":online?"Ссылка доступна":"Проверка соединения";
         Find<System.Windows.Shapes.Ellipse>("StatusLamp").SetResourceReference(System.Windows.Shapes.Shape.FillProperty,online?"Accent":"Muted");
         T("LinkExpiry").Text=session==null?"Срок ссылки · "+preferences.Hours+" ч":"Доступ до "+session.Expires.ToLocalTime().ToString("dd.MM, HH:mm");
         long total=files.Sum(f=>f.Bytes);
