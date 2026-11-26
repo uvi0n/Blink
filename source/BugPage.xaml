@@ -1,0 +1,10 @@
+<ScrollViewer xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" VerticalScrollBarVisibility="Auto"><StackPanel>
+<TextBlock FontSize="30" FontWeight="SemiBold" Margin="0,0,0,16">Нашли ошибку?</TextBlock>
+<Border Padding="24" CornerRadius="{DynamicResource Round}" Background="{DynamicResource Card}"><StackPanel>
+<TextBlock TextWrapping="Wrap" FontSize="17">Напишите, что пошло не так и как повторить ошибку.</TextBlock>
+<TextBlock Name="MailAddress" FontSize="19" Foreground="{DynamicResource Accent}" Margin="0,10,0,18"/>
+<WrapPanel><Button Name="WriteMail" Background="{DynamicResource Accent}" Foreground="{DynamicResource OnAccent}">Написать</Button><Button Name="CopyMail">Скопировать адрес</Button></WrapPanel>
+<TextBlock Foreground="{DynamicResource Muted}" Margin="0,10,0,0" TextWrapping="Wrap">Откроется Gmail. Если вы уже вошли, появится письмо с шаблоном. Если потребуется вход, Gmail предложит войти в аккаунт.</TextBlock>
+<TextBlock Name="MailStatus" Foreground="{DynamicResource Accent}" TextWrapping="Wrap"/>
+</StackPanel></Border><Button Name="Back" Margin="0,14,0,0" HorizontalAlignment="Left">Назад к передаче</Button>
+</StackPanel></ScrollViewer>

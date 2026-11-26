@@ -48,7 +48,7 @@ class Desk {
         trayIcon=new System.Windows.Forms.NotifyIcon{Text="Blink",Icon=System.Drawing.Icon.ExtractAssociatedIcon(typeof(Desk).Assembly.Location)};
         var menu=new System.Windows.Forms.ContextMenuStrip();menu.Items.Add("Открыть",null,delegate{Restore();});menu.Items.Add("Выйти",null,delegate{exitTray=true;Restore();window.Close();exitTray=false;});trayIcon.ContextMenuStrip=menu;trayIcon.DoubleClick+=delegate{Restore();};
         B("Settings").Click+=delegate{
-            var host=Find<ContentControl>("SettingsHost");if(host.Content!=null){HideSettings();return;}
+            var host=Find<ContentControl>("SettingsHost");if(host.Content!=null && host.Tag==null){HideSettings();return;}host.Tag=null;
             string before=preferences.Folder;
             host.Content=preferences.Page(window,saved=>{if(saved){ApplyAccent();if(before!=preferences.Folder){if(session==null)folder=preferences.Folder;else pendingFolder=preferences.Folder;}}HideSettings();Sync();});
             host.Visibility=Visibility.Visible;Find<ScrollViewer>("TransferPage").Visibility=Visibility.Collapsed;
@@ -61,13 +61,27 @@ class Desk {
         };
         B("NewTransfer").Click+=delegate{try{Process.Start(typeof(Desk).Assembly.Location);}catch(Exception ex){MessageBox.Show(window,ex.Message,"Blink");}};
         B("Bug").Click+=delegate{
-            var menuBug=new ContextMenu();
-            var mail=new MenuItem{Header="Написать на prusenkodanila@gmail.com"};
-            mail.Click+=delegate{
-                string uri="mailto:prusenkodanila@gmail.com?subject="+Uri.EscapeDataString("Ошибка в Blink "+Boot.Current)+"&body="+Uri.EscapeDataString("Что произошло?\r\n\r\nКак повторить?\r\n\r\nОжидаемый результат\r\n\r\nВерсия Blink "+Boot.Current);
-                try{Process.Start(new ProcessStartInfo(uri){UseShellExecute=true});}catch{MessageBox.Show(window,"Откройте свою почту и напишите на prusenkodanila@gmail.com.","Нашёл баг");}
+            var host=Find<ContentControl>("SettingsHost");
+            if(host.Tag as string=="Bug"){HideSettings();return;}
+            host.Tag="Bug";
+            using(var stream=typeof(Desk).Assembly.GetManifestResourceStream("BugPage.xaml"))host.Content=XamlReader.Load(stream);
+            host.Visibility=Visibility.Visible;
+            Find<ScrollViewer>("TransferPage").Visibility=Visibility.Collapsed;
+            var page=(FrameworkElement)host.Content;
+            var status=(TextBlock)page.FindName("MailStatus");
+            const string email="prusenkodanila@gmail.com";
+            ((TextBlock)page.FindName("MailAddress")).Text=email;
+            ((Button)page.FindName("Back")).Click+=delegate{HideSettings();};
+            ((Button)page.FindName("CopyMail")).Click+=delegate{
+                try{Clipboard.SetText(email);status.Text="Адрес скопирован.";}
+                catch(System.Runtime.InteropServices.ExternalException){status.Text="Буфер обмена занят. Попробуйте ещё раз.";}
             };
-            menuBug.Items.Add(mail);menuBug.PlacementTarget=B("Bug");menuBug.IsOpen=true;
+            ((Button)page.FindName("WriteMail")).Click+=delegate{
+                string subject=Uri.EscapeDataString("Ошибка в Blink "+Boot.Current);
+                string body=Uri.EscapeDataString("Что произошло?\r\n\r\nКак повторить ошибку?\r\n\r\nЧто должно было произойти?\r\n\r\nВерсия Blink "+Boot.Current);
+                try{Process.Start(new ProcessStartInfo("https://mail.google.com/mail/?view=cm&fs=1&to="+email+"&su="+subject+"&body="+body){UseShellExecute=true});}
+                catch(System.ComponentModel.Win32Exception){status.Text="Не удалось открыть браузер. Скопируйте адрес и откройте свою почту.";}
+            };
         };
         Queue.AddHandler(Button.ClickEvent,new RoutedEventHandler(delegate(object sender,RoutedEventArgs e){
             var button=e.OriginalSource as Button;
@@ -121,7 +135,7 @@ class Desk {
     void Restore(){window.Show();window.WindowState=WindowState.Normal;window.Activate();trayIcon.Visible=false;}
     void ApplyAccent(){Themes.Apply(window,preferences);RefreshTabs();}
     void RefreshTabs(){B("SendTab").Background=receive?Brushes.Transparent:(Brush)window.Resources["Surface"];B("ReceiveTab").Background=!receive?Brushes.Transparent:(Brush)window.Resources["Surface"];}
-    void HideSettings(){var host=Find<ContentControl>("SettingsHost");host.Content=null;host.Visibility=Visibility.Collapsed;Find<ScrollViewer>("TransferPage").Visibility=Visibility.Visible;}
+    void HideSettings(){var host=Find<ContentControl>("SettingsHost");host.Content=null;host.Tag=null;host.Visibility=Visibility.Collapsed;Find<ScrollViewer>("TransferPage").Visibility=Visibility.Visible;}
     async void Add(string[] paths){foreach(string path in paths){if(Directory.Exists(path)){
             if(session!=null||preparing)continue;preparing=true;Sync();
             try{string packed=await System.Threading.Tasks.Task.Run(()=>Extras.Prepare(path,false));scratch.Add(packed);files.Add(new Entry{Path=packed,Bytes=new FileInfo(packed).Length});}
